@@ -1,0 +1,45 @@
+# =========================
+# Backend (Python / FastAPI)
+# =========================
+# Environments
+backend/venv/
+backend/env/
+.venv/
+env/
+
+# Byte-compiled / optimized / DLL files
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Database
+*.sqlite3
+*.db
+
+# Secrets
+backend/.env
+
+# =========================
+# Frontend (Next.js / Node)
+# =========================
+# Dependencies
+frontend/node_modules/
+node_modules/
+
+# Next.js build output
+frontend/.next/
+.next/
+out/
+build/
+
+# Secrets
+frontend/.env.local
+frontend/.env.*.local
+
+# =========================
+# OS & IDE Files
+# =========================
+.DS_Store
+.vscode/
+.idea/
+*.log
