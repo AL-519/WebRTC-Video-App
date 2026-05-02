@@ -23,13 +23,14 @@ class ConnectionManager:
                 del self.active_rooms[room_code]
                 print(f"Room {room_code} closed.")
 
-    async def broadcast(self, message: dict, room_code: str, sender_ws: WebSocket = None):
+    # FIX: Changed 'sender_ws' to 'exclude' to match the call in rooms.py
+    async def broadcast(self, message: dict, room_code: str, exclude: WebSocket = None):
         if room_code in self.active_rooms:
             dead_connections = []
 
             # 1. Safely attempt to message everyone
             for connection in self.active_rooms[room_code]:
-                if connection != sender_ws:
+                if connection != exclude:
                     try:
                         await connection.send_json(message)
                     except Exception as e:

@@ -5,23 +5,19 @@ from fastapi.middleware.cors import CORSMiddleware
 
 app = FastAPI(title="WebRTC Signaling Server")
 
-origins = [
-    "http://localhost:3000",
-    "http://127.0.0.1:3000",
-]
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=origins,
+    allow_origins=["http://localhost:3000", "http://127.0.0.1:3000"],
     allow_credentials=True,
-    allow_methods=["*"],  # Allows all methods (GET, POST, etc.)
-    allow_headers=["*"],  # Allows all headers (including Authorization)
+    allow_methods=["*"],
+    allow_headers=["*"],
 )
 
-# ROUTER HERE
-app.include_router(auth.router)
-app.include_router(rooms.router)
+# Keep Auth for OTP login, Keep Rooms for DB-Free video chat
+app.include_router(auth.router, prefix="/api")
+app.include_router(rooms.router, prefix="/api")
 
 
 @app.get("/")
 async def root():
-    return {"message": "System is online and ready for WebRTC signaling."}
+    return {"message": "Hybrid System Online: Auth enabled, Signaling DB-Free."}

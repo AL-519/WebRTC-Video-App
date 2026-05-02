@@ -3,8 +3,8 @@
 
 import { useState } from 'react';
 import { useRouter } from 'next/navigation';
-import { api } from '@/lib/api';
-import { Mail, KeyRound, ArrowRight, Loader2 } from 'lucide-react';
+import { requestOtp, verifyOtp } from '@/lib/api'; 
+import { Mail, KeyRound, ArrowRight, Loader2, Video } from 'lucide-react';
 
 export default function LoginPage() {
     const router = useRouter();
@@ -12,118 +12,129 @@ export default function LoginPage() {
     const [email, setEmail] = useState('');
     const [otp, setOtp] = useState('');
     const [loading, setLoading] = useState(false);
-    const [error, setError] = useState('');
 
-    const handleRequestOTP = async (e: React.FormEvent) => {
+    const handleRequestOtp = async (e: React.FormEvent) => {
         e.preventDefault();
-        setLoading(true);
-        setError('');
+        if (!email.trim()) return;
         
+        setLoading(true);
         try {
-            await api.post('/auth/request-otp', { email });
-            setStep(2); // Move to OTP verification step
-        } catch (err: any) {
-            setError(err.response?.data?.detail || 'Failed to request OTP');
+            await requestOtp(email.trim());
+            setStep(2);
+        } catch (error) {
+            console.error("Failed to request OTP:", error);
+            alert("Could not send the login code.");
         } finally {
             setLoading(false);
         }
     };
 
-    const handleVerifyOTP = async (e: React.FormEvent) => {
+    const handleVerifyOtp = async (e: React.FormEvent) => {
         e.preventDefault();
+        if (!otp.trim()) return;
+
         setLoading(true);
-        setError('');
-        
         try {
-            const response = await api.post('/auth/verify-otp', { email, otp });
-            
-            // Save the JWT and user data to localStorage
-            localStorage.setItem('access_token', response.data.access_token);
-            localStorage.setItem('username', response.data.username);
-            
-            // Redirect to the dashboard
+            // Pass empty strings for the name/username since we ask for it later now
+            const data = await verifyOtp(email.trim(), otp.trim(), '', '');
+            localStorage.setItem('access_token', data.access_token);
             router.push('/dashboard');
-        } catch (err: any) {
-            setError(err.response?.data?.detail || 'Invalid OTP');
+        } catch (error) {
+            console.error("Failed to verify OTP:", error);
+            alert("Invalid or expired code. Please try again.");
         } finally {
             setLoading(false);
         }
     };
 
     return (
-        <div className="min-h-screen flex items-center justify-center bg-gray-50">
-            <div className="max-w-md w-full space-y-8 p-8 bg-white rounded-xl shadow-lg">
-                <div className="text-center">
-                    <h2 className="text-3xl font-extrabold text-gray-900">
-                        {step === 1 ? 'WebRTC Video App' : 'Enter Security Code'}
-                    </h2>
-                    <p className="mt-2 text-sm text-gray-600">
-                        {step === 1 
-                            ? 'Enter your email to receive a secure login code.' 
-                            : `We sent a code to ${email}`}
-                    </p>
+        <div className="min-h-screen bg-gray-50 dark:bg-gray-900 transition-colors duration-300 flex flex-col items-center justify-center p-6">
+            
+            {/* Branding Header */}
+            <div className="flex items-center gap-3 mb-10">
+                <div className="w-12 h-12 bg-blue-600 rounded-xl flex items-center justify-center shadow-lg shadow-blue-600/30">
+                    <Video className="w-7 h-7 text-white" />
                 </div>
+                <h1 className="text-3xl font-bold tracking-tight text-gray-900 dark:text-white transition-colors duration-300">
+                    WebRTC Sync
+                </h1>
+            </div>
 
-                <form className="mt-8 space-y-6" onSubmit={step === 1 ? handleRequestOTP : handleVerifyOTP}>
-                    {error && (
-                        <div className="p-3 text-sm text-red-600 bg-red-50 rounded-md">
-                            {error}
-                        </div>
-                    )}
-
-                    {step === 1 ? (
-                        <div className="relative">
-                            <div className="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none">
-                                <Mail className="h-5 w-5 text-gray-400" />
-                            </div>
-                            <input
-                                type="email"
-                                required
-                                value={email}
-                                onChange={(e) => setEmail(e.target.value)}
-                                className="appearance-none block w-full pl-10 pr-3 py-3 border border-gray-300 rounded-md placeholder-gray-400 text-gray-900 bg-white focus:outline-none focus:ring-blue-500 focus:border-blue-500 sm:text-sm"
-                                placeholder="name@example.com"
-                            />
-                        </div>
-                    ) : (
-                        <div className="relative">
-                            <div className="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none">
-                                <KeyRound className="h-5 w-5 text-gray-400" />
-                            </div>
-                            <input
-                                type="text"
-                                required
-                                value={otp}
-                                onChange={(e) => setOtp(e.target.value.replace(/\D/g, '').slice(0, 6))}
-                                className="appearance-none block w-full pl-10 pr-3 py-3 border border-gray-300 rounded-md placeholder-gray-400 text-gray-900 bg-white focus:outline-none focus:ring-blue-500 focus:border-blue-500 sm:text-sm tracking-widest text-center text-lg"                                
-                                placeholder="123456"
-                            />
-                        </div>
-                    )}
-
-                    <button
-                        type="submit"
-                        disabled={loading}
-                        className="group relative w-full flex justify-center py-3 px-4 border border-transparent text-sm font-medium rounded-md text-white bg-blue-600 hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-blue-500 disabled:opacity-70 transition-colors"
-                    >
-                        {loading ? (
-                            <Loader2 className="animate-spin h-5 w-5" />
-                        ) : (
-                            <>
-                                {step === 1 ? 'Send Login Code' : 'Verify & Login'}
-                                <ArrowRight className="ml-2 h-5 w-5 group-hover:translate-x-1 transition-transform" />
-                            </>
-                        )}
-                    </button>
-                </form>
+            <div className="w-full max-w-md bg-white dark:bg-gray-800 rounded-3xl p-8 shadow-2xl border border-gray-200 dark:border-gray-700 transition-colors duration-300">
                 
-                {step === 2 && (
-                    <button 
-                        onClick={() => setStep(1)}
-                        className="w-full text-sm text-gray-500 hover:text-gray-900 text-center mt-4"
-                    >
-                        Use a different email
-                    </button>
+                {step === 1 ? (
+                    /* STEP 1: REQUEST OTP */
+                    <div className="animate-in fade-in slide-in-from-bottom-4 duration-500">
+                        <div className="text-center mb-8">
+                            <h2 className="text-2xl font-bold text-gray-900 dark:text-white mb-2">Welcome Back</h2>
+                            <p className="text-gray-500 dark:text-gray-400 text-sm">Enter your email to receive a secure login code.</p>
+                        </div>
+
+                        <form onSubmit={handleRequestOtp} className="space-y-6">
+                            <div className="relative">
+                                <Mail className="absolute left-4 top-1/2 -translate-y-1/2 w-5 h-5 text-gray-400 dark:text-gray-500" />
+                                <input 
+                                    type="email" 
+                                    required 
+                                    placeholder="you@example.com" 
+                                    value={email} 
+                                    onChange={(e) => setEmail(e.target.value)}
+                                    className="w-full bg-gray-50 dark:bg-gray-900 border border-gray-300 dark:border-gray-600 text-gray-900 dark:text-white rounded-xl pl-12 pr-4 py-3.5 focus:outline-none focus:ring-2 focus:ring-blue-500/50 focus:border-blue-500 transition shadow-inner placeholder-gray-400 dark:placeholder-gray-500"
+                                />
+                            </div>
+                            
+                            <button 
+                                type="submit" 
+                                disabled={loading || !email.trim()} 
+                                className="w-full py-4 bg-blue-600 hover:bg-blue-700 disabled:bg-blue-300 dark:disabled:bg-gray-700 disabled:text-blue-100 dark:disabled:text-gray-500 text-white rounded-xl font-bold transition flex items-center justify-center gap-2 shadow-lg shadow-blue-600/30 dark:shadow-none"
+                            >
+                                {loading ? <Loader2 className="w-5 h-5 animate-spin" /> : "Send Login Code"}
+                            </button>
+                        </form>
+                    </div>
+                ) : (
+                    /* STEP 2: VERIFY OTP */
+                    <div className="animate-in fade-in slide-in-from-right-8 duration-500">
+                        <div className="text-center mb-8">
+                            <h2 className="text-2xl font-bold text-gray-900 dark:text-white mb-2">Check Your Email</h2>
+                            <p className="text-gray-500 dark:text-gray-400 text-sm">
+                                Code sent to <span className="text-blue-600 dark:text-blue-400 font-medium">{email}</span>
+                            </p>
+                        </div>
+
+                        <form onSubmit={handleVerifyOtp} className="space-y-5">
+                            <div className="relative">
+                                <KeyRound className="absolute left-4 top-1/2 -translate-y-1/2 w-5 h-5 text-gray-400 dark:text-gray-500" />
+                                <input 
+                                    type="text" 
+                                    required 
+                                    placeholder="123456" 
+                                    value={otp} 
+                                    onChange={(e) => setOtp(e.target.value)}
+                                    className="w-full bg-gray-50 dark:bg-gray-900 border border-gray-300 dark:border-gray-600 text-gray-900 dark:text-white rounded-xl pl-12 pr-4 py-3.5 focus:outline-none focus:ring-2 focus:ring-green-500/50 focus:border-green-500 transition text-center tracking-[0.5em] font-mono text-lg shadow-inner placeholder-gray-400 dark:placeholder-gray-500"
+                                />
+                            </div>
+                            
+                            <button 
+                                type="submit" 
+                                disabled={loading || !otp.trim()} 
+                                className="w-full py-4 bg-green-600 hover:bg-green-700 disabled:bg-green-300 dark:disabled:bg-gray-700 disabled:text-green-100 dark:disabled:text-gray-500 text-white rounded-xl font-bold transition flex items-center justify-center gap-2 mt-4 shadow-lg shadow-green-600/30 dark:shadow-none"
+                            >
+                                {loading ? <Loader2 className="w-5 h-5 animate-spin" /> : <>Verify & Login <ArrowRight className="w-5 h-5" /></>}
+                            </button>
+
+                            {/* Back button to re-enter email */}
+                            <div className="text-center mt-6 border-t border-gray-100 dark:border-gray-700 pt-4">
+                                <button 
+                                    type="button"
+                                    onClick={() => setStep(1)}
+                                    className="text-sm font-medium text-gray-500 dark:text-gray-400 hover:text-blue-600 dark:hover:text-blue-400 transition-colors"
+                                >
+                                    Use a different email address
+                                </button>
+                            </div>
+                        </form>
+                    </div>
                 )}
             </div>
         </div>

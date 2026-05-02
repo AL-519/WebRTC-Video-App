@@ -1,18 +1,46 @@
-# backend/.gitignore
-
-# Environments
-venv/
-env/
-.venv/
-
 # Byte-compiled / optimized / DLL files
 __pycache__/
 *.py[cod]
 *$py.class
 
-# Database
-*.sqlite3
-*.db
+# C extensions
+*.so
 
-# Secrets
+# Virtual environments (CRITICAL: Do not commit these)
+venv/
+env/
+ENV/
+env.bak/
+venv.bak/
+.venv/
+
+# Environment variables (CRITICAL: Do not commit secrets)
 .env
+.env.development
+.env.production
+
+# Testing / profiling
+.tox/
+.coverage
+.coverage.*
+nosetests.xml
+coverage.xml
+*.cover
+*.py,cover
+.hypothesis/
+.pytest_cache/
+
+# IDEs and Editors
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# OS generated files
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
