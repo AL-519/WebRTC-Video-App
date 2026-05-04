@@ -25,6 +25,7 @@ export function useWebRTC(roomCode: string) {
     const [remoteUsername, setRemoteUsername] = useState('Remote Peer');
     const [remoteIsMuted, setRemoteIsMuted] = useState(false);
     const [remoteIsVideoOff, setRemoteIsVideoOff] = useState(false);
+    const [remoteIsScreenSharing, setRemoteIsScreenSharing] = useState(false); // NEW STATE
     const [isPartnerSpeakingRightNow, setIsPartnerSpeakingRightNow] = useState(false);
 
     // Chat & Data States
@@ -40,10 +41,12 @@ export function useWebRTC(roomCode: string) {
 
     const isMutedRef = useRef(isMuted);
     const isVideoOffRef = useRef(isVideoOff);
+    const isScreenSharingRef = useRef(isScreenSharing); // NEW REF
     const amISpeakingRef = useRef(amISpeakingRightNow);
 
     useEffect(() => { isMutedRef.current = isMuted; }, [isMuted]);
     useEffect(() => { isVideoOffRef.current = isVideoOff; }, [isVideoOff]);
+    useEffect(() => { isScreenSharingRef.current = isScreenSharing; }, [isScreenSharing]); // KEEP SYNCED
     useEffect(() => { amISpeakingRef.current = amISpeakingRightNow; }, [amISpeakingRightNow]);
 
     // Clear emoji reaction after 2 seconds
@@ -56,7 +59,10 @@ export function useWebRTC(roomCode: string) {
 
     // Audio Analyzer for speaking indicators
     useEffect(() => {
-        if (!localStream) return;
+        if (!localStream || localStream.getAudioTracks().length === 0) {
+            setAmISpeakingRightNow(false);
+            return;
+        }
         
         let audioCtx: AudioContext;
         let animationFrame: number;
@@ -104,7 +110,7 @@ export function useWebRTC(roomCode: string) {
 
     // PHASE 2: ACTIVE ROOM
     useEffect(() => {
-        if (!hasJoined || !localStream) return;
+        if (!hasJoined || !localStreamRef.current) return;
         const token = localStorage.getItem('access_token');
         if (!token) return;
 
@@ -140,14 +146,15 @@ export function useWebRTC(roomCode: string) {
 
         pc.ondatachannel = (event) => setupDataChannel(event.channel);
 
-        localStream.getTracks().forEach(track => pc.addTrack(track, localStream));
+        // Always add from the raw camera stream initially
+        localStreamRef.current.getTracks().forEach(track => pc.addTrack(track, localStreamRef.current!));
         pc.ontrack = (event) => setRemoteStream(event.streams[0]);
 
         const wsUrl = `ws://127.0.0.1:8000/api/rooms/ws/${roomCode}?token=${token}`;
         ws.current = new WebSocket(wsUrl);
 
         ws.current.onopen = () => {
-            ws.current?.send(JSON.stringify({ type: 'media-state', username, isMuted: isMutedRef.current, isVideoOff: isVideoOffRef.current, isSpeaking: amISpeakingRef.current }));
+            ws.current?.send(JSON.stringify({ type: 'media-state', username, isMuted: isMutedRef.current, isVideoOff: isVideoOffRef.current, isSpeaking: amISpeakingRef.current, isScreenSharing: isScreenSharingRef.current }));
         };
 
         pc.onicecandidate = (event) => {
@@ -160,7 +167,7 @@ export function useWebRTC(roomCode: string) {
             const message = JSON.parse(event.data);
             try {
                 if (message.type === 'peer-joined') {
-                    ws.current?.send(JSON.stringify({ type: 'media-state', username, isMuted: isMutedRef.current, isVideoOff: isVideoOffRef.current, isSpeaking: amISpeakingRef.current }));
+                    ws.current?.send(JSON.stringify({ type: 'media-state', username, isMuted: isMutedRef.current, isVideoOff: isVideoOffRef.current, isSpeaking: amISpeakingRef.current, isScreenSharing: isScreenSharingRef.current }));
                     const newDataChannel = pc.createDataChannel('chat');
                     setupDataChannel(newDataChannel);
                     const offer = await pc.createOffer();
@@ -168,7 +175,7 @@ export function useWebRTC(roomCode: string) {
                     ws.current?.send(JSON.stringify({ type: 'offer', offer }));
                 } 
                 else if (message.type === 'offer') {
-                    ws.current?.send(JSON.stringify({ type: 'media-state', username, isMuted: isMutedRef.current, isVideoOff: isVideoOffRef.current, isSpeaking: amISpeakingRef.current }));
+                    ws.current?.send(JSON.stringify({ type: 'media-state', username, isMuted: isMutedRef.current, isVideoOff: isVideoOffRef.current, isSpeaking: amISpeakingRef.current, isScreenSharing: isScreenSharingRef.current }));
                     await pc.setRemoteDescription(new RTCSessionDescription(message.offer));
                     const answer = await pc.createAnswer();
                     await pc.setLocalDescription(answer);
@@ -185,21 +192,20 @@ export function useWebRTC(roomCode: string) {
                     if (message.isMuted !== undefined) setRemoteIsMuted(message.isMuted);
                     if (message.isVideoOff !== undefined) setRemoteIsVideoOff(message.isVideoOff);
                     if (message.isSpeaking !== undefined) setIsPartnerSpeakingRightNow(message.isSpeaking);
+                    if (message.isScreenSharing !== undefined) setRemoteIsScreenSharing(message.isScreenSharing); // NEW: Catch remote state
                 }
                 else if (message.type === 'peer-left') {
                     setRemoteStream(null);
                     setRemoteUsername("Remote Peer");
+                    setRemoteIsScreenSharing(false); // Reset on leave
                 }
-                // NEW: Handle Host Commands
                 else if (message.type === 'command') {
                     if (message.action === 'kick') {
                         leaveRoom();
                         window.location.href = '/dashboard?kicked=true'; 
                     } else if (message.action === 'mute') {
-                        // Force mute if we aren't already
                         if (!isMutedRef.current) toggleAudio();
                     } else if (message.action === 'video-off') {
-                        // Force video off if it isn't already
                         if (!isVideoOffRef.current) toggleVideo();
                     }
                 }
@@ -212,19 +218,22 @@ export function useWebRTC(roomCode: string) {
             pc.close();
             ws.current?.close();
         };
-    }, [hasJoined, roomCode, localStream, username]);
+    }, [hasJoined, roomCode, username]);
 
+    // NEW: Broadcast state changes instantly
     useEffect(() => {
         if (ws.current?.readyState === WebSocket.OPEN && hasJoined) {
-            ws.current.send(JSON.stringify({ type: 'media-state', username, isMuted, isVideoOff, isSpeaking: amISpeakingRightNow }));
+            ws.current.send(JSON.stringify({ type: 'media-state', username, isMuted, isVideoOff, isSpeaking: amISpeakingRightNow, isScreenSharing }));
         }
-    }, [isMuted, isVideoOff, amISpeakingRightNow, hasJoined, username]);
+    }, [isMuted, isVideoOff, amISpeakingRightNow, isScreenSharing, hasJoined, username]);
 
     const toggleAudio = () => {
         if (localStreamRef.current) {
             const audioTrack = localStreamRef.current.getAudioTracks()[0];
-            audioTrack.enabled = !audioTrack.enabled;
-            setIsMuted(!audioTrack.enabled);
+            if (audioTrack) {
+                audioTrack.enabled = !audioTrack.enabled;
+                setIsMuted(!audioTrack.enabled);
+            }
         }
     };
 
@@ -242,10 +251,13 @@ export function useWebRTC(roomCode: string) {
                 if (localStreamRef.current) {
                     localStreamRef.current.getVideoTracks().forEach(track => localStreamRef.current?.removeTrack(track));
                     localStreamRef.current.addTrack(newVideoTrack);
-                    setLocalStream(new MediaStream(localStreamRef.current.getTracks()));
+                    
+                    if (!isScreenSharing) {
+                        setLocalStream(new MediaStream(localStreamRef.current.getTracks()));
+                    }
                 }
 
-                if (peerConnection.current) {
+                if (peerConnection.current && !isScreenSharing) {
                     const sender = peerConnection.current.getSenders().find(s => s.track && s.track.kind === 'video');
                     if (sender) sender.replaceTrack(newVideoTrack);
                     else peerConnection.current.addTrack(newVideoTrack, localStreamRef.current!);
@@ -258,29 +270,45 @@ export function useWebRTC(roomCode: string) {
         }
     };
 
+    const stopScreenShare = () => {
+        if (localStreamRef.current) {
+            const camTrack = localStreamRef.current.getVideoTracks()[0];
+            const sender = peerConnection.current?.getSenders().find(s => s.track?.kind === 'video');
+            
+            if (sender && camTrack) {
+                sender.replaceTrack(camTrack);
+            }
+            
+            setLocalStream(localStreamRef.current);
+            setIsScreenSharing(false);
+        }
+    };
+
     const toggleScreenShare = async () => {
         try {
             if (!isScreenSharing) {
-                const screenStream = await navigator.mediaDevices.getDisplayMedia({ video: true });
+                const screenStream = await navigator.mediaDevices.getDisplayMedia({ 
+                    video: { cursor: "always" } as any, 
+                    audio: false 
+                });
                 const screenTrack = screenStream.getVideoTracks()[0];
+                
                 const sender = peerConnection.current?.getSenders().find(s => s.track?.kind === 'video');
-                if (sender) sender.replaceTrack(screenTrack);
+                if (sender) {
+                    sender.replaceTrack(screenTrack);
+                }
+
+                setLocalStream(screenStream);
+                setIsScreenSharing(true);
 
                 screenTrack.onended = () => {
-                    if (localStreamRef.current) {
-                        const camTrack = localStreamRef.current.getVideoTracks()[0];
-                        if (camTrack) sender?.replaceTrack(camTrack);
-                        setIsScreenSharing(false);
-                    }
+                    stopScreenShare();
                 };
-                setIsScreenSharing(true);
             } else {
-                if (localStreamRef.current) {
-                    const camTrack = localStreamRef.current.getVideoTracks()[0];
-                    const sender = peerConnection.current?.getSenders().find(s => s.track?.kind === 'video');
-                    if (sender && camTrack) sender.replaceTrack(camTrack);
-                    setIsScreenSharing(false);
+                if (localStream && localStream !== localStreamRef.current) {
+                    localStream.getTracks().forEach(track => track.stop());
                 }
+                stopScreenShare();
             }
         } catch (error) {
             console.error("Error sharing screen:", error);
@@ -414,7 +442,6 @@ export function useWebRTC(roomCode: string) {
         setHasJoined(false);
     };
 
-    // NEW: Expose the websocket to the UI so the Host can send commands
     const sendHostCommand = (action: 'kick' | 'mute' | 'video-off') => {
         if (ws.current?.readyState === WebSocket.OPEN) {
             ws.current.send(JSON.stringify({ type: 'command', action }));
@@ -427,9 +454,10 @@ export function useWebRTC(roomCode: string) {
         isMuted, isVideoOff, isScreenSharing,
         joinRoom, leaveRoom, hasJoined, 
         username, remoteUsername, remoteIsMuted, remoteIsVideoOff,
+        remoteIsScreenSharing, // NEW: Export the remote state
         amISpeakingRightNow, isPartnerSpeakingRightNow,
         chatMessageHistory, sendTextMessageToChat, sendEmojiReactionToPartner, sendImageFileToChat,
         currentlyDisplayingReaction, downloadChatHistoryAsPDF,
-        sendHostCommand // Expose this!
+        sendHostCommand 
     };
 }

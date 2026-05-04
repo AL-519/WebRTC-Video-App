@@ -21,6 +21,7 @@ export default function RoomPage({ params }: { params: Promise<{ code: string }>
         isMuted, isVideoOff, isScreenSharing,
         joinRoom, leaveRoom, hasJoined, 
         username, remoteUsername, remoteIsMuted, remoteIsVideoOff,
+        remoteIsScreenSharing, // Pulling in remote state!
         amISpeakingRightNow, isPartnerSpeakingRightNow,
         chatMessageHistory, sendTextMessageToChat, sendEmojiReactionToPartner, sendImageFileToChat,
         currentlyDisplayingReaction, downloadChatHistoryAsPDF,
@@ -32,44 +33,40 @@ export default function RoomPage({ params }: { params: Promise<{ code: string }>
     const chatEndRef = useRef<HTMLDivElement>(null);
     const fileInputRef = useRef<HTMLInputElement>(null);
 
-    // Sidebar States
     const [activeSidebar, setActiveSidebar] = useState<'none' | 'chat'>('none');
     const [chatInput, setChatInput] = useState('');
     const [showEmojiPicker, setShowEmojiPicker] = useState(false);
     const [nameInput, setNameInput] = useState('');
     const [isCopied, setIsCopied] = useState(false);
-
-    // Scheduling & Status States
     const [roomStatus, setRoomStatus] = useState<'loading' | 'ready' | 'scheduled' | 'error'>('loading');
     const [scheduledTime, setScheduledTime] = useState<Date | null>(null);
     const [timeRemaining, setTimeRemaining] = useState<string>('');
     const [errorMessage, setErrorMessage] = useState('');
-    
-    // Host Logic
     const [isHost, setIsHost] = useState(false);
+
+    // Dynamic boolean to check if ANYONE is sharing the screen
+    const isPresentationMode = isScreenSharing || remoteIsScreenSharing;
 
     useEffect(() => {
         setNameInput(localStorage.getItem('saved_display_name') || '');
         checkRoomStatus();
     }, []);
 
-    // Scroll chat to bottom
     useEffect(() => {
         if (activeSidebar === 'chat') {
             chatEndRef.current?.scrollIntoView({ behavior: 'smooth' });
         }
     }, [chatMessageHistory, activeSidebar]);
 
-    // Attach video streams
+    // Added isScreenSharing and remoteIsScreenSharing to dependency arrays so refs reattach when layout shifts
     useEffect(() => {
         if (localVideoRef.current && localStream) localVideoRef.current.srcObject = localStream;
-    }, [localStream, hasJoined, roomStatus]);
+    }, [localStream, hasJoined, roomStatus, isScreenSharing, remoteIsScreenSharing]);
 
     useEffect(() => {
         if (remoteVideoRef.current && remoteStream) remoteVideoRef.current.srcObject = remoteStream;
-    }, [remoteStream, hasJoined]);
+    }, [remoteStream, hasJoined, isScreenSharing, remoteIsScreenSharing]);
 
-    // Countdown Timer Logic
     useEffect(() => {
         if (roomStatus === 'scheduled' && scheduledTime) {
             const timer = setInterval(() => {
@@ -96,17 +93,14 @@ export default function RoomPage({ params }: { params: Promise<{ code: string }>
         }
     }, [roomStatus, scheduledTime]);
 
-    // Ping the backend to see if we can join AND check if we are the host
     const checkRoomStatus = async () => {
         try {
             const response = await api.get(`/rooms/${code}/status`);
-            
-            // Check if the current logged-in user is the Host
             const myUsername = localStorage.getItem('username');
-            if (response.data.host === myUsername) {
+            const myEmail = localStorage.getItem('email');
+            if (response.data.host === myUsername || response.data.host === myEmail) {
                 setIsHost(true);
             }
-
             if (response.data.status === 'scheduled') {
                 setScheduledTime(new Date(response.data.scheduled_time + 'Z'));
                 setRoomStatus('scheduled');
@@ -149,9 +143,6 @@ export default function RoomPage({ params }: { params: Promise<{ code: string }>
         </div>
     );
 
-    // ==========================================
-    // VIEW 1: THE LOBBY / WAITING ROOM
-    // ==========================================
     if (!hasJoined) {
         if (roomStatus === 'loading') {
             return (
@@ -297,62 +288,122 @@ export default function RoomPage({ params }: { params: Promise<{ code: string }>
             {/* MAIN CONTENT AREA (Videos + Sidebar) */}
             <div className="flex-grow flex overflow-hidden">
                 
-                {/* VIDEO GRID */}
-                <div className="flex-1 p-4 flex flex-col md:flex-row gap-4 items-center justify-center overflow-y-auto">
-                    {/* Local Video */}
-                    <div className={`relative w-full ${remoteStream && activeSidebar !== 'none' ? 'md:w-full max-w-2xl' : remoteStream ? 'md:w-1/2' : 'max-w-4xl'} aspect-video bg-black rounded-2xl overflow-hidden border-4 transition-all duration-300 shadow-xl ${amISpeakingRightNow ? 'border-green-500' : 'border-gray-300 dark:border-gray-700'}`}>
-                        {isVideoOff && <AvatarOverlay name={username} />}
-                        <video ref={localVideoRef} autoPlay playsInline muted className={`w-full h-full object-cover ${!isScreenSharing ? 'transform scale-x-[-1]' : ''}`} />
-                        
-                        <div className="absolute bottom-4 left-4 bg-black/60 px-3 py-1.5 rounded-lg text-sm text-white backdrop-blur-sm flex items-center gap-2 z-20 shadow-md">
-                            {username} (You) {isHost && "(Host)"} {isScreenSharing && <span className="text-blue-400 ml-1">- Sharing</span>}
-                            {isMuted && <MicOff className="w-4 h-4 text-red-500" />}
-                        </div>
-                    </div>
-
-                    {/* Remote Video */}
-                    <div className={`relative w-full ${remoteStream && activeSidebar !== 'none' ? 'md:w-full max-w-2xl' : remoteStream ? 'md:w-1/2' : 'hidden'} aspect-video bg-gray-100 dark:bg-gray-800 rounded-2xl overflow-hidden border-4 transition-all duration-300 shadow-xl flex items-center justify-center ${isPartnerSpeakingRightNow ? 'border-green-500' : 'border-gray-300 dark:border-gray-700'}`}>
-                        {remoteStream ? (
-                            <>
-                                {remoteIsVideoOff && <AvatarOverlay name={remoteUsername} />}
-                                <video ref={remoteVideoRef} autoPlay playsInline className="w-full h-full object-cover" />
-                                <div className="absolute bottom-4 left-4 bg-black/60 px-3 py-1.5 rounded-lg text-sm text-white backdrop-blur-sm flex items-center gap-2 z-20 shadow-md">
-                                    {remoteUsername} {!isHost && "(Host)"}
-                                    {remoteIsMuted && <MicOff className="w-4 h-4 text-red-500" />}
-                                </div>
-                            </>
-                        ) : (
-                            <div className="text-gray-500 dark:text-gray-400 flex flex-col items-center">
-                                <div className="w-16 h-16 border-4 border-gray-300 dark:border-gray-600 border-t-blue-600 dark:border-t-blue-500 rounded-full animate-spin mb-4"></div>
-                                <p>Waiting for {remoteUsername}...</p>
+                {/* DYNAMIC STAGE (Grid OR Screen Share Presentation) */}
+                <div className={`flex-1 p-4 flex ${isPresentationMode ? 'items-center justify-center bg-gray-200 dark:bg-gray-900/50' : 'flex-col md:flex-row items-center justify-center'} gap-4 overflow-y-auto`}>
+                    
+                    {isPresentationMode ? (
+                        /* Presentation Mode: Big Screen Share Viewer */
+                        <div className="relative w-full h-full max-h-full rounded-2xl overflow-hidden shadow-2xl border border-gray-300 dark:border-gray-700 bg-black">
+                            {/* Dynamically attach either the local or remote ref depending on WHO is sharing */}
+                            {isScreenSharing ? (
+                                <video ref={localVideoRef} autoPlay playsInline muted className="w-full h-full object-contain" />
+                            ) : (
+                                <video ref={remoteVideoRef} autoPlay playsInline className="w-full h-full object-contain" />
+                            )}
+                            <div className="absolute bottom-4 left-4 bg-black/60 px-3 py-1.5 rounded-lg text-sm text-white backdrop-blur-sm z-20 shadow-md flex items-center gap-2">
+                                {isScreenSharing ? `${username}'s Screen` : `${remoteUsername}'s Screen`}
                             </div>
-                        )}
-                    </div>
+                        </div>
+                    ) : (
+                        /* Normal Mode: Side-by-Side Video Grid */
+                        <>
+                            {/* Local Video */}
+                            <div className={`relative w-full ${remoteStream && activeSidebar !== 'none' ? 'md:w-full max-w-2xl' : remoteStream ? 'md:w-1/2' : 'max-w-4xl'} aspect-video bg-black rounded-2xl overflow-hidden border-4 transition-all duration-300 shadow-xl ${amISpeakingRightNow ? 'border-green-500' : 'border-gray-300 dark:border-gray-700'}`}>
+                                {isVideoOff && <AvatarOverlay name={username} />}
+                                <video ref={localVideoRef} autoPlay playsInline muted className="w-full h-full object-cover transform scale-x-[-1]" />
+                                
+                                <div className="absolute bottom-4 left-4 bg-black/60 px-3 py-1.5 rounded-lg text-sm text-white backdrop-blur-sm flex items-center gap-2 z-20 shadow-md">
+                                    {username} (You) {isHost && "(Host)"}
+                                    {isMuted && <MicOff className="w-4 h-4 text-red-500" />}
+                                </div>
+                            </div>
+
+                            {/* Remote Video */}
+                            <div className={`relative w-full ${remoteStream && activeSidebar !== 'none' ? 'md:w-full max-w-2xl' : remoteStream ? 'md:w-1/2' : 'hidden'} aspect-video bg-gray-100 dark:bg-gray-800 rounded-2xl overflow-hidden border-4 transition-all duration-300 shadow-xl flex items-center justify-center ${isPartnerSpeakingRightNow ? 'border-green-500' : 'border-gray-300 dark:border-gray-700'}`}>
+                                {remoteStream ? (
+                                    <>
+                                        {remoteIsVideoOff && <AvatarOverlay name={remoteUsername} />}
+                                        <video ref={remoteVideoRef} autoPlay playsInline className="w-full h-full object-cover" />
+                                        <div className="absolute bottom-4 left-4 bg-black/60 px-3 py-1.5 rounded-lg text-sm text-white backdrop-blur-sm flex items-center gap-2 z-20 shadow-md">
+                                            {remoteUsername} {!isHost && "(Host)"}
+                                            {remoteIsMuted && <MicOff className="w-4 h-4 text-red-500" />}
+                                        </div>
+                                    </>
+                                ) : (
+                                    <div className="text-gray-500 dark:text-gray-400 flex flex-col items-center">
+                                        <div className="w-16 h-16 border-4 border-gray-300 dark:border-gray-600 border-t-blue-600 dark:border-t-blue-500 rounded-full animate-spin mb-4"></div>
+                                        <p>Waiting for {remoteUsername}...</p>
+                                    </div>
+                                )}
+                            </div>
+                        </>
+                    )}
                 </div>
 
-                {/* DYNAMIC SIDEBAR (Chat) */}
-                {activeSidebar !== 'none' && (
+                {/* DYNAMIC SIDEBAR (Contains Chat AND/OR Participant Videos during Screen Share) */}
+                {(activeSidebar !== 'none' || isPresentationMode) && (
                     <div className="w-80 md:w-96 bg-white dark:bg-gray-800 border-l border-gray-200 dark:border-gray-700 flex flex-col flex-shrink-0 shadow-2xl z-20 animate-in slide-in-from-right duration-300 transition-colors">
                         
-                        {/* TAB HEADER */}
-                        <div className="flex border-b border-gray-200 dark:border-gray-700 bg-white/95 dark:bg-gray-800/95 backdrop-blur">
-                            <button 
-                                onClick={() => setActiveSidebar('chat')}
-                                className={`flex-1 py-4 text-sm font-bold flex items-center justify-center gap-2 transition-colors ${activeSidebar === 'chat' ? 'text-blue-600 dark:text-blue-400 border-b-2 border-blue-600 dark:border-blue-400' : 'text-gray-500 hover:bg-gray-50 dark:hover:bg-gray-700'}`}
-                            >
-                                <MessageSquare className="w-4 h-4" /> Chat
-                            </button>
-                        </div>
+                        {/* Mini Video Gallery (Only visible when main stage is occupied by Screen Share) */}
+                        {isPresentationMode && (
+                            <div className="p-4 flex flex-col gap-4 bg-gray-50 dark:bg-gray-900 border-b border-gray-200 dark:border-gray-700">
+                                
+                                {/* Local Video in Sidebar */}
+                                <div className={`relative w-full aspect-video bg-black rounded-xl overflow-hidden border-2 transition-all shadow-sm ${amISpeakingRightNow ? 'border-green-500' : 'border-gray-300 dark:border-gray-600'}`}>
+                                    {/* If I am sharing, my actual video element is currently rendering the screen share on the main stage, so I just show an Avatar here.
+                                        If my partner is sharing, my local video element renders here so my partner can see my face! */}
+                                    {isScreenSharing ? (
+                                        <AvatarOverlay name={username} />
+                                    ) : (
+                                        <>
+                                            {isVideoOff && <AvatarOverlay name={username} />}
+                                            <video ref={localVideoRef} autoPlay playsInline muted className="w-full h-full object-cover transform scale-x-[-1]" />
+                                        </>
+                                    )}
+                                    <div className="absolute bottom-2 left-2 bg-black/60 px-2 py-1 rounded text-xs text-white z-20 flex gap-1 items-center">
+                                        {username} (You) {isHost && "(Host)"}
+                                        {isMuted && <MicOff className="w-3 h-3 text-red-500" />}
+                                    </div>
+                                </div>
 
-                        {/* SIDEBAR CONTENT: CHAT */}
+                                {/* Remote Video in Sidebar */}
+                                {remoteStream && (
+                                    <div className={`relative w-full aspect-video bg-gray-100 dark:bg-gray-800 rounded-xl overflow-hidden border-2 transition-all shadow-sm ${isPartnerSpeakingRightNow ? 'border-green-500' : 'border-gray-300 dark:border-gray-600'}`}>
+                                        {/* Same logic: If the partner is sharing, their stream is on the main stage, so we just show an Avatar here. */}
+                                        {remoteIsScreenSharing ? (
+                                            <AvatarOverlay name={remoteUsername} />
+                                        ) : (
+                                            <>
+                                                {remoteIsVideoOff && <AvatarOverlay name={remoteUsername} />}
+                                                <video ref={remoteVideoRef} autoPlay playsInline className="w-full h-full object-cover" />
+                                            </>
+                                        )}
+                                        <div className="absolute bottom-2 left-2 bg-black/60 px-2 py-1 rounded text-xs text-white z-20 flex gap-1 items-center">
+                                            {remoteUsername} {!isHost && "(Host)"}
+                                            {remoteIsMuted && <MicOff className="w-3 h-3 text-red-500" />}
+                                        </div>
+                                    </div>
+                                )}
+                            </div>
+                        )}
+
+                        {/* CHAT SECTION */}
                         {activeSidebar === 'chat' && (
                             <>
+                                <div className="flex border-b border-gray-200 dark:border-gray-700 bg-white/95 dark:bg-gray-800/95 backdrop-blur">
+                                    <button 
+                                        onClick={() => setActiveSidebar('chat')}
+                                        className={`flex-1 py-4 text-sm font-bold flex items-center justify-center gap-2 transition-colors ${activeSidebar === 'chat' ? 'text-blue-600 dark:text-blue-400 border-b-2 border-blue-600 dark:border-blue-400' : 'text-gray-500 hover:bg-gray-50 dark:hover:bg-gray-700'}`}
+                                    >
+                                        <MessageSquare className="w-4 h-4" /> Chat
+                                    </button>
+                                </div>
                                 <div className="p-3 border-b border-gray-100 dark:border-gray-700 flex justify-end">
                                     <button onClick={downloadChatHistoryAsPDF} className="text-xs text-gray-500 hover:text-gray-900 dark:hover:text-white flex items-center gap-1 transition">
                                         <Download className="w-3 h-3" /> Export PDF
                                     </button>
                                 </div>
-                                <div className="flex-grow p-4 overflow-y-auto flex flex-col gap-4 bg-gray-50/50 dark:bg-gray-900/50">
+                                <div className="flex-grow p-4 overflow-y-auto flex flex-col gap-4 bg-gray-50/50 dark:bg-gray-900/50 min-h-[200px]">
                                     {chatMessageHistory.map((msg, idx) => (
                                         <div key={idx} className={`flex flex-col ${msg.isLocal ? 'items-end' : 'items-start'}`}>
                                             <span className="text-xs text-gray-500 dark:text-gray-400 mb-1 mx-1">
