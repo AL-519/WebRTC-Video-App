@@ -38,6 +38,14 @@ export function useWebRTC(roomCode: string) {
     
     const localStreamRef = useRef<MediaStream | null>(null);
 
+    const isMutedRef = useRef(isMuted);
+    const isVideoOffRef = useRef(isVideoOff);
+    const amISpeakingRef = useRef(amISpeakingRightNow);
+
+    useEffect(() => { isMutedRef.current = isMuted; }, [isMuted]);
+    useEffect(() => { isVideoOffRef.current = isVideoOff; }, [isVideoOff]);
+    useEffect(() => { amISpeakingRef.current = amISpeakingRightNow; }, [amISpeakingRightNow]);
+
     // Clear emoji reaction after 2 seconds
     useEffect(() => {
         if (currentlyDisplayingReaction) {
@@ -118,18 +126,12 @@ export function useWebRTC(roomCode: string) {
                 }
                 else if (data.type === 'file-chunk') {
                     const { fileId, chunk, chunkIndex, totalChunks, sender, timestamp } = data;
-                    
-                    if (!incomingFileChunksRef.current[fileId]) {
-                        incomingFileChunksRef.current[fileId] = [];
-                    }
-                    
+                    if (!incomingFileChunksRef.current[fileId]) incomingFileChunksRef.current[fileId] = [];
                     incomingFileChunksRef.current[fileId][chunkIndex] = chunk;
                     
                     if (Object.keys(incomingFileChunksRef.current[fileId]).length === totalChunks) {
                         const completeBase64Image = incomingFileChunksRef.current[fileId].join('');
-                        setChatMessageHistory(prev => [...prev, { 
-                            sender, text: '', imageUrl: completeBase64Image, timestamp, isLocal: false 
-                        }]);
+                        setChatMessageHistory(prev => [...prev, { sender, text: '', imageUrl: completeBase64Image, timestamp, isLocal: false }]);
                         delete incomingFileChunksRef.current[fileId];
                     }
                 }
@@ -145,7 +147,7 @@ export function useWebRTC(roomCode: string) {
         ws.current = new WebSocket(wsUrl);
 
         ws.current.onopen = () => {
-            ws.current?.send(JSON.stringify({ type: 'media-state', username, isMuted, isVideoOff, isSpeaking: amISpeakingRightNow }));
+            ws.current?.send(JSON.stringify({ type: 'media-state', username, isMuted: isMutedRef.current, isVideoOff: isVideoOffRef.current, isSpeaking: amISpeakingRef.current }));
         };
 
         pc.onicecandidate = (event) => {
@@ -158,7 +160,7 @@ export function useWebRTC(roomCode: string) {
             const message = JSON.parse(event.data);
             try {
                 if (message.type === 'peer-joined') {
-                    ws.current?.send(JSON.stringify({ type: 'media-state', username, isMuted, isVideoOff, isSpeaking: amISpeakingRightNow }));
+                    ws.current?.send(JSON.stringify({ type: 'media-state', username, isMuted: isMutedRef.current, isVideoOff: isVideoOffRef.current, isSpeaking: amISpeakingRef.current }));
                     const newDataChannel = pc.createDataChannel('chat');
                     setupDataChannel(newDataChannel);
                     const offer = await pc.createOffer();
@@ -166,7 +168,7 @@ export function useWebRTC(roomCode: string) {
                     ws.current?.send(JSON.stringify({ type: 'offer', offer }));
                 } 
                 else if (message.type === 'offer') {
-                    ws.current?.send(JSON.stringify({ type: 'media-state', username, isMuted, isVideoOff, isSpeaking: amISpeakingRightNow }));
+                    ws.current?.send(JSON.stringify({ type: 'media-state', username, isMuted: isMutedRef.current, isVideoOff: isVideoOffRef.current, isSpeaking: amISpeakingRef.current }));
                     await pc.setRemoteDescription(new RTCSessionDescription(message.offer));
                     const answer = await pc.createAnswer();
                     await pc.setLocalDescription(answer);
@@ -187,6 +189,19 @@ export function useWebRTC(roomCode: string) {
                 else if (message.type === 'peer-left') {
                     setRemoteStream(null);
                     setRemoteUsername("Remote Peer");
+                }
+                // NEW: Handle Host Commands
+                else if (message.type === 'command') {
+                    if (message.action === 'kick') {
+                        leaveRoom();
+                        window.location.href = '/dashboard?kicked=true'; 
+                    } else if (message.action === 'mute') {
+                        // Force mute if we aren't already
+                        if (!isMutedRef.current) toggleAudio();
+                    } else if (message.action === 'video-off') {
+                        // Force video off if it isn't already
+                        if (!isVideoOffRef.current) toggleVideo();
+                    }
                 }
             } catch (err) {
                 console.error("Signaling error:", err);
@@ -213,11 +228,33 @@ export function useWebRTC(roomCode: string) {
         }
     };
 
-    const toggleVideo = () => {
-        if (localStreamRef.current) {
-            const videoTrack = localStreamRef.current.getVideoTracks()[0];
-            videoTrack.enabled = !videoTrack.enabled;
-            setIsVideoOff(!videoTrack.enabled);
+    const toggleVideo = async () => {
+        try {
+            if (!isVideoOff) {
+                if (localStreamRef.current) {
+                    localStreamRef.current.getVideoTracks().forEach(track => track.stop());
+                }
+                setIsVideoOff(true);
+            } else {
+                const newStream = await navigator.mediaDevices.getUserMedia({ video: true });
+                const newVideoTrack = newStream.getVideoTracks()[0];
+
+                if (localStreamRef.current) {
+                    localStreamRef.current.getVideoTracks().forEach(track => localStreamRef.current?.removeTrack(track));
+                    localStreamRef.current.addTrack(newVideoTrack);
+                    setLocalStream(new MediaStream(localStreamRef.current.getTracks()));
+                }
+
+                if (peerConnection.current) {
+                    const sender = peerConnection.current.getSenders().find(s => s.track && s.track.kind === 'video');
+                    if (sender) sender.replaceTrack(newVideoTrack);
+                    else peerConnection.current.addTrack(newVideoTrack, localStreamRef.current!);
+                }
+                setIsVideoOff(false);
+            }
+        } catch (error) {
+            console.error("Error toggling video:", error);
+            alert("Could not access camera. Please check your permissions.");
         }
     };
 
@@ -232,7 +269,7 @@ export function useWebRTC(roomCode: string) {
                 screenTrack.onended = () => {
                     if (localStreamRef.current) {
                         const camTrack = localStreamRef.current.getVideoTracks()[0];
-                        sender?.replaceTrack(camTrack);
+                        if (camTrack) sender?.replaceTrack(camTrack);
                         setIsScreenSharing(false);
                     }
                 };
@@ -241,7 +278,7 @@ export function useWebRTC(roomCode: string) {
                 if (localStreamRef.current) {
                     const camTrack = localStreamRef.current.getVideoTracks()[0];
                     const sender = peerConnection.current?.getSenders().find(s => s.track?.kind === 'video');
-                    if (sender) sender.replaceTrack(camTrack);
+                    if (sender && camTrack) sender.replaceTrack(camTrack);
                     setIsScreenSharing(false);
                 }
             }
@@ -293,9 +330,7 @@ export function useWebRTC(roomCode: string) {
         }
     };
 
-    // NEW PDF GENERATOR LOGIC
     const downloadChatHistoryAsPDF = async () => {
-        // Dynamically import jsPDF so Next.js doesn't crash on the server
         const { jsPDF } = await import("jspdf");
         const doc = new jsPDF();
         
@@ -304,44 +339,31 @@ export function useWebRTC(roomCode: string) {
         const pageHeight = doc.internal.pageSize.height;
         const maxWidth = doc.internal.pageSize.width - margin * 2;
 
-        // Title
         doc.setFontSize(18);
         doc.setFont("helvetica", "bold");
         doc.text(`Sync Room Chat: ${roomCode}`, margin, yOffset);
         yOffset += 15;
 
-        // Loop through all messages
         for (const msg of chatMessageHistory) {
             const time = new Date(msg.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
             
-            // Check for page break before printing header
-            if (yOffset > pageHeight - 20) {
-                doc.addPage();
-                yOffset = 20;
-            }
+            if (yOffset > pageHeight - 20) { doc.addPage(); yOffset = 20; }
 
-            // Print Sender Header
             doc.setFontSize(10);
             doc.setFont("helvetica", "bold");
             doc.setTextColor(100);
             doc.text(`[${time}] ${msg.sender}:`, margin, yOffset);
             yOffset += 6;
 
-            // Print Image or Text
             if (msg.imageUrl) {
                 try {
-                    // Create a hidden image element to calculate aspect ratio
                     const img = new window.Image();
                     img.src = msg.imageUrl;
-                    await new Promise((resolve, reject) => {
-                        img.onload = resolve;
-                        img.onerror = reject;
-                    });
+                    await new Promise((resolve, reject) => { img.onload = resolve; img.onerror = reject; });
 
-                    // Scale image down to fit the PDF page width
                     let imgWidth = img.width;
                     let imgHeight = img.height;
-                    const maxImgWidth = 100; // max width in PDF units
+                    const maxImgWidth = 100; 
 
                     if (imgWidth > maxImgWidth) {
                         const ratio = maxImgWidth / imgWidth;
@@ -349,13 +371,7 @@ export function useWebRTC(roomCode: string) {
                         imgHeight = imgHeight * ratio;
                     }
 
-                    // Check for page break before printing image
-                    if (yOffset + imgHeight > pageHeight - 15) {
-                        doc.addPage();
-                        yOffset = 20;
-                    }
-
-                    // Paint image to the PDF
+                    if (yOffset + imgHeight > pageHeight - 15) { doc.addPage(); yOffset = 20; }
                     doc.addImage(msg.imageUrl, margin, yOffset, imgWidth, imgHeight);
                     yOffset += imgHeight + 10;
                 } catch (e) {
@@ -369,18 +385,11 @@ export function useWebRTC(roomCode: string) {
                 doc.setTextColor(0);
                 const textLines = doc.splitTextToSize(msg.text, maxWidth);
                 
-                // Check for page break before printing long text
-                if (yOffset + (textLines.length * 5) > pageHeight - 15) {
-                    doc.addPage();
-                    yOffset = 20;
-                }
-
+                if (yOffset + (textLines.length * 5) > pageHeight - 15) { doc.addPage(); yOffset = 20; }
                 doc.text(textLines, margin, yOffset);
                 yOffset += (textLines.length * 5) + 8;
             }
         }
-
-        // Trigger the download
         doc.save(`Chat_History_${roomCode}.pdf`);
     };
 
@@ -405,6 +414,13 @@ export function useWebRTC(roomCode: string) {
         setHasJoined(false);
     };
 
+    // NEW: Expose the websocket to the UI so the Host can send commands
+    const sendHostCommand = (action: 'kick' | 'mute' | 'video-off') => {
+        if (ws.current?.readyState === WebSocket.OPEN) {
+            ws.current.send(JSON.stringify({ type: 'command', action }));
+        }
+    };
+
     return { 
         localStream, remoteStream, 
         toggleAudio, toggleVideo, toggleScreenShare, 
@@ -413,6 +429,7 @@ export function useWebRTC(roomCode: string) {
         username, remoteUsername, remoteIsMuted, remoteIsVideoOff,
         amISpeakingRightNow, isPartnerSpeakingRightNow,
         chatMessageHistory, sendTextMessageToChat, sendEmojiReactionToPartner, sendImageFileToChat,
-        currentlyDisplayingReaction, downloadChatHistoryAsPDF // <-- Updated name
+        currentlyDisplayingReaction, downloadChatHistoryAsPDF,
+        sendHostCommand // Expose this!
     };
 }

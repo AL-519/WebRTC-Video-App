@@ -1,9 +1,18 @@
 # backend/app/api/rooms.py
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect, Query, Depends, HTTPException, Header
+from sqlalchemy.orm import Session
+from datetime import datetime, timezone
+import random
+import string
+import jwt
+
 from app.services.signaling import manager
 from app.core.config import settings
-import jwt
-import secrets
+
+# Import from the backend root
+import models
+import schemas
+from database import get_db
 
 router = APIRouter(prefix="/rooms", tags=["Rooms"])
 
@@ -30,15 +39,72 @@ async def verify_ws_token(token: str):
     except jwt.PyJWTError:
         return None
 
-# --- DATABASE-FREE ROUTES ---
+# --- HELPER ---
 
 
-@router.post("/create")
-def create_room(user_id: str = Depends(get_current_user_http)):
-    """Generates a random room code. Requires login, but does NOT save to a database."""
-    room_code = secrets.token_hex(3).upper()
-    return {"room_code": room_code}
+def generate_room_code():
+    return ''.join(random.choices(string.ascii_uppercase + string.digits, k=6))
 
+# --- DATABASE-BACKED ROUTES ---
+
+
+@router.post("/create", response_model=schemas.RoomResponse)
+def create_room(
+    room_data: schemas.RoomCreate,
+    db: Session = Depends(get_db),
+    user_id: str = Depends(get_current_user_http)  # Enforces login check
+):
+    """Generates a random room code and saves it to the Neon Database."""
+    code = generate_room_code()
+
+    # Ensure code is completely unique in the DB
+    while db.query(models.Room).filter(models.Room.room_code == code).first():
+        code = generate_room_code()
+
+    new_room = models.Room(
+        room_code=code,
+        host_email=room_data.host_email,
+        scheduled_time=room_data.scheduled_time
+    )
+
+    db.add(new_room)
+    db.commit()
+    db.refresh(new_room)
+
+    return new_room
+
+
+@router.get("/{room_code}/status")
+def get_room_status(room_code: str, db: Session = Depends(get_db)):
+    """Checks if a room exists and if its scheduled time has arrived."""
+    room = db.query(models.Room).filter(
+        models.Room.room_code == room_code.upper()).first()
+
+    if not room:
+        raise HTTPException(status_code=404, detail="Room not found")
+
+    if not room.is_active:
+        raise HTTPException(status_code=400, detail="This meeting has ended.")
+
+    # Check if the meeting is scheduled for the future
+    if room.scheduled_time:
+        scheduled_utc = room.scheduled_time.replace(tzinfo=timezone.utc)
+        now = datetime.now(timezone.utc)
+
+        if scheduled_utc > now:
+            return {
+                "status": "scheduled",
+                "scheduled_time": room.scheduled_time,
+                "host": room.host_email
+            }
+
+    return {
+        "status": "ready",
+        "host": room.host_email
+    }
+
+
+# --- SIGNALING WEBSOCKET ---
 
 @router.websocket("/ws/{room_code}")
 async def websocket_endpoint(websocket: WebSocket, room_code: str, token: str = Query(...)):

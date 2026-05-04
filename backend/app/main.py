@@ -1,9 +1,13 @@
 # backend/app/main.py
 from fastapi import FastAPI
-from app.api import auth, rooms
 from fastapi.middleware.cors import CORSMiddleware
+from app.api import auth, rooms
+import models
+from database import engine
 
 app = FastAPI(title="WebRTC Signaling Server")
+
+models.Base.metadata.create_all(bind=engine)
 
 app.add_middleware(
     CORSMiddleware,
@@ -13,11 +17,11 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# Keep Auth for OTP login, Keep Rooms for DB-Free video chat
+# Attach our API routers
 app.include_router(auth.router, prefix="/api")
 app.include_router(rooms.router, prefix="/api")
 
 
 @app.get("/")
 async def root():
-    return {"message": "Hybrid System Online: Auth enabled, Signaling DB-Free."}
+    return {"message": "Hybrid System Online: Auth enabled, Signaling DB-Ready."}

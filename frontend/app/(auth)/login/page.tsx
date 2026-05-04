@@ -37,6 +37,7 @@ export default function LoginPage() {
         try {
             // Pass empty strings for the name/username since we ask for it later now
             const data = await verifyOtp(email.trim(), otp.trim(), '', '');
+            localStorage.setItem('email', email.trim());
             localStorage.setItem('access_token', data.access_token);
             router.push('/dashboard');
         } catch (error) {
